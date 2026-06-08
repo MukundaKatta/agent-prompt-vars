@@ -1,164 +1,215 @@
-"""Tests for agent-prompt-vars."""
+"""Tests for agent-prompt-vars.
 
-import sys
+Uses only the Python standard library (``unittest``) so the suite runs with::
+
+    python3 -m unittest discover -s tests
+
+No third-party test dependencies are required.
+"""
+
 import os
+import sys
+import unittest
+
+# Make the package importable when running from a checkout without installing.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../src"))
 
-import pytest
 from agent_prompt_vars import PromptTemplate, PromptVarsError, fill
 
 
-# ---------------------------------------------------------------------------
-# fill() — double brace syntax
-# ---------------------------------------------------------------------------
+class TestFillDoubleBrace(unittest.TestCase):
+    """fill() with the default {{var}} syntax."""
 
-def test_fill_basic():
-    result = fill("Hello, {{name}}!", name="World")
-    assert result == "Hello, World!"
+    def test_fill_basic(self):
+        self.assertEqual(fill("Hello, {{name}}!", name="World"), "Hello, World!")
 
-def test_fill_multiple():
-    result = fill("{{greeting}}, {{name}}!", greeting="Hi", name="Alice")
-    assert result == "Hi, Alice!"
+    def test_fill_multiple(self):
+        self.assertEqual(
+            fill("{{greeting}}, {{name}}!", greeting="Hi", name="Alice"),
+            "Hi, Alice!",
+        )
 
-def test_fill_repeated_var():
-    result = fill("{{a}} and {{a}} again", a="X")
-    assert result == "X and X again"
+    def test_fill_repeated_var(self):
+        self.assertEqual(fill("{{a}} and {{a}} again", a="X"), "X and X again")
 
-def test_fill_no_vars():
-    result = fill("No variables here.")
-    assert result == "No variables here."
+    def test_fill_no_vars(self):
+        self.assertEqual(fill("No variables here."), "No variables here.")
 
-def test_fill_int_value():
-    result = fill("Count: {{n}}", n=42)
-    assert result == "Count: 42"
+    def test_fill_int_value(self):
+        self.assertEqual(fill("Count: {{n}}", n=42), "Count: 42")
 
-def test_fill_missing_raises():
-    with pytest.raises(PromptVarsError, match="missing variable"):
-        fill("Hello, {{name}}!")  # no name provided
+    def test_fill_zero_value(self):
+        # 0 is falsy but must still be substituted.
+        self.assertEqual(fill("Count: {{n}}", n=0), "Count: 0")
 
-def test_fill_not_strict():
-    result = fill("Hello, {{name}}!", strict=False)
-    assert "{{name}}" in result  # placeholder preserved
+    def test_fill_none_value(self):
+        self.assertEqual(fill("Value: {{x}}", x=None), "Value: None")
 
-def test_fill_single_brace():
-    result = fill("Hello, {name}!", double_brace=False, name="World")
-    assert result == "Hello, World!"
+    def test_fill_missing_raises(self):
+        with self.assertRaisesRegex(PromptVarsError, "missing variable"):
+            fill("Hello, {{name}}!")  # no name provided
 
-def test_fill_whitespace_in_placeholder():
-    result = fill("Hello, {{ name }}!", name="World")
-    assert result == "Hello, World!"
+    def test_fill_not_strict_preserves_placeholder(self):
+        result = fill("Hello, {{name}}!", strict=False)
+        self.assertIn("{{name}}", result)  # placeholder preserved
 
+    def test_fill_not_strict_mixed(self):
+        # Known vars filled, unknown ones left untouched.
+        self.assertEqual(
+            fill("Hello {{name}}, {{missing}}", name="X", strict=False),
+            "Hello X, {{missing}}",
+        )
 
-# ---------------------------------------------------------------------------
-# PromptTemplate
-# ---------------------------------------------------------------------------
+    def test_fill_whitespace_in_placeholder(self):
+        self.assertEqual(fill("Hello, {{ name }}!", name="World"), "Hello, World!")
 
-def test_template_render():
-    tmpl = PromptTemplate("You are a {{role}}.")
-    assert tmpl.render(role="researcher") == "You are a researcher."
+    def test_fill_dotted_var(self):
+        self.assertEqual(fill("{{user.name}}", **{"user.name": "Bob"}), "Bob")
 
-def test_template_required_vars():
-    tmpl = PromptTemplate("{{a}} and {{b}} and {{a}}")
-    assert tmpl.required_vars == ["a", "b"]  # sorted, unique
+    def test_fill_single_pass_no_reexpansion(self):
+        # A value that itself looks like a placeholder is NOT expanded again.
+        self.assertEqual(fill("{{a}}", a="{{b}}"), "{{b}}")
 
-def test_template_variables():
-    tmpl = PromptTemplate("{{a}} then {{b}} then {{a}}")
-    assert tmpl.variables() == ["a", "b", "a"]  # in order with duplicates
-
-def test_template_render_missing_raises():
-    tmpl = PromptTemplate("{{a}} and {{b}}")
-    with pytest.raises(PromptVarsError, match="missing variable"):
-        tmpl.render(a="x")  # b missing
-
-def test_template_render_unknown_raises():
-    tmpl = PromptTemplate("{{a}}")
-    with pytest.raises(PromptVarsError, match="unknown variable"):
-        tmpl.render(a="x", b="y")  # b not in template
-
-def test_template_not_strict_unknown_ok():
-    tmpl = PromptTemplate("{{a}}", strict=False)
-    result = tmpl.render(a="x", b="y")
-    assert result == "x"
-
-def test_template_single_brace():
-    tmpl = PromptTemplate("Hello, {name}!", double_brace=False)
-    assert tmpl.render(name="World") == "Hello, World!"
-
-def test_template_no_vars():
-    tmpl = PromptTemplate("No placeholders.")
-    assert tmpl.required_vars == []
-    assert tmpl.render() == "No placeholders."
+    def test_fill_extra_kwargs_ignored(self):
+        # fill() does not validate unknown kwargs (unlike strict render()).
+        self.assertEqual(fill("{{a}}", a="1", zzz="2"), "1")
 
 
-# ---------------------------------------------------------------------------
-# PromptTemplate.render_partial
-# ---------------------------------------------------------------------------
+class TestFillSingleBrace(unittest.TestCase):
+    """fill() with the {var} (single-brace) syntax."""
 
-def test_render_partial_fills_some():
-    tmpl = PromptTemplate("{{greeting}}, {{name}}! Your task: {{task}}")
-    partial = tmpl.render_partial(greeting="Hello", name="Alice")
-    # task still a placeholder
-    assert "Hello" in str(partial)
-    assert "Alice" in str(partial)
-    assert "{{task}}" in str(partial)
+    def test_fill_single_brace(self):
+        self.assertEqual(
+            fill("Hello, {name}!", double_brace=False, name="World"),
+            "Hello, World!",
+        )
 
-def test_render_partial_then_render():
-    tmpl = PromptTemplate("{{greeting}}, {{name}}!")
-    partial = tmpl.render_partial(greeting="Hi")
-    final = partial.render(name="World")
-    assert final == "Hi, World!"
-
-def test_render_partial_returns_template():
-    tmpl = PromptTemplate("{{a}} {{b}}")
-    result = tmpl.render_partial(a="x")
-    assert isinstance(result, PromptTemplate)
+    def test_fill_single_brace_missing_raises(self):
+        with self.assertRaisesRegex(PromptVarsError, "missing variable"):
+            fill("Hello, {name}!", double_brace=False)
 
 
-# ---------------------------------------------------------------------------
-# is_complete / missing_vars
-# ---------------------------------------------------------------------------
+class TestPromptTemplate(unittest.TestCase):
+    def test_render(self):
+        tmpl = PromptTemplate("You are a {{role}}.")
+        self.assertEqual(tmpl.render(role="researcher"), "You are a researcher.")
 
-def test_is_complete_true():
-    tmpl = PromptTemplate("{{a}} and {{b}}")
-    assert tmpl.is_complete(a="x", b="y") is True
+    def test_required_vars_sorted_unique(self):
+        tmpl = PromptTemplate("{{a}} and {{b}} and {{a}}")
+        self.assertEqual(tmpl.required_vars, ["a", "b"])
 
-def test_is_complete_false():
-    tmpl = PromptTemplate("{{a}} and {{b}}")
-    assert tmpl.is_complete(a="x") is False
+    def test_variables_order_with_duplicates(self):
+        tmpl = PromptTemplate("{{a}} then {{b}} then {{a}}")
+        self.assertEqual(tmpl.variables(), ["a", "b", "a"])
 
-def test_missing_vars():
-    tmpl = PromptTemplate("{{a}} and {{b}}")
-    assert tmpl.missing_vars(a="x") == ["b"]
+    def test_render_missing_raises(self):
+        tmpl = PromptTemplate("{{a}} and {{b}}")
+        with self.assertRaisesRegex(PromptVarsError, "missing variable"):
+            tmpl.render(a="x")  # b missing
 
-def test_missing_vars_none():
-    tmpl = PromptTemplate("{{a}}")
-    assert tmpl.missing_vars(a="x") == []
+    def test_render_unknown_raises(self):
+        tmpl = PromptTemplate("{{a}}")
+        with self.assertRaisesRegex(PromptVarsError, "unknown variable"):
+            tmpl.render(a="x", b="y")  # b not in template
 
-def test_is_complete_extra_ok():
-    tmpl = PromptTemplate("{{a}}")
-    # Extra kwargs are ignored in is_complete
-    assert tmpl.is_complete(a="x", b="extra") is True
+    def test_not_strict_unknown_ok(self):
+        tmpl = PromptTemplate("{{a}}", strict=False)
+        self.assertEqual(tmpl.render(a="x", b="y"), "x")
+
+    def test_not_strict_missing_preserved(self):
+        tmpl = PromptTemplate("{{a}} {{b}}", strict=False)
+        self.assertEqual(tmpl.render(a="x"), "x {{b}}")
+
+    def test_single_brace(self):
+        tmpl = PromptTemplate("Hello, {name}!", double_brace=False)
+        self.assertEqual(tmpl.render(name="World"), "Hello, World!")
+
+    def test_no_vars(self):
+        tmpl = PromptTemplate("No placeholders.")
+        self.assertEqual(tmpl.required_vars, [])
+        self.assertEqual(tmpl.render(), "No placeholders.")
 
 
-# ---------------------------------------------------------------------------
-# Edge cases
-# ---------------------------------------------------------------------------
+class TestRenderPartial(unittest.TestCase):
+    def test_fills_some_keeps_rest(self):
+        tmpl = PromptTemplate("{{greeting}}, {{name}}! Your task: {{task}}")
+        partial = tmpl.render_partial(greeting="Hello", name="Alice")
+        self.assertIn("Hello", str(partial))
+        self.assertIn("Alice", str(partial))
+        self.assertIn("{{task}}", str(partial))
 
-def test_empty_template():
-    result = fill("")
-    assert result == ""
+    def test_returns_template(self):
+        tmpl = PromptTemplate("{{a}} {{b}}")
+        result = tmpl.render_partial(a="x")
+        self.assertIsInstance(result, PromptTemplate)
 
-def test_multiline_template():
-    tmpl = PromptTemplate("Line 1: {{a}}\nLine 2: {{b}}")
-    result = tmpl.render(a="hello", b="world")
-    assert result == "Line 1: hello\nLine 2: world"
+    def test_remaining_required_vars(self):
+        tmpl = PromptTemplate("{{a}} {{b}}")
+        partial = tmpl.render_partial(a="x")
+        self.assertEqual(partial.required_vars, ["b"])
 
-def test_repr():
-    tmpl = PromptTemplate("{{a}} {{b}}")
-    r = repr(tmpl)
-    assert "PromptTemplate" in r
-    assert "a" in r
+    def test_then_render(self):
+        tmpl = PromptTemplate("{{greeting}}, {{name}}!")
+        partial = tmpl.render_partial(greeting="Hi")
+        self.assertEqual(partial.render(name="World"), "Hi, World!")
 
-def test_str():
-    tmpl = PromptTemplate("Hello, {{name}}!")
-    assert str(tmpl) == "Hello, {{name}}!"
+    def test_preserves_brace_style(self):
+        tmpl = PromptTemplate("Hello, {name}!", double_brace=False)
+        partial = tmpl.render_partial()
+        self.assertFalse(partial.double_brace)
+        self.assertEqual(partial.render(name="World"), "Hello, World!")
+
+
+class TestIntrospection(unittest.TestCase):
+    def test_is_complete_true(self):
+        tmpl = PromptTemplate("{{a}} and {{b}}")
+        self.assertTrue(tmpl.is_complete(a="x", b="y"))
+
+    def test_is_complete_false(self):
+        tmpl = PromptTemplate("{{a}} and {{b}}")
+        self.assertFalse(tmpl.is_complete(a="x"))
+
+    def test_is_complete_no_vars(self):
+        tmpl = PromptTemplate("no vars")
+        self.assertTrue(tmpl.is_complete())
+
+    def test_is_complete_extra_ok(self):
+        tmpl = PromptTemplate("{{a}}")
+        self.assertTrue(tmpl.is_complete(a="x", b="extra"))
+
+    def test_missing_vars(self):
+        tmpl = PromptTemplate("{{a}} and {{b}}")
+        self.assertEqual(tmpl.missing_vars(a="x"), ["b"])
+
+    def test_missing_vars_none(self):
+        tmpl = PromptTemplate("{{a}}")
+        self.assertEqual(tmpl.missing_vars(a="x"), [])
+
+
+class TestEdgeCases(unittest.TestCase):
+    def test_empty_template(self):
+        self.assertEqual(fill(""), "")
+
+    def test_multiline_template(self):
+        tmpl = PromptTemplate("Line 1: {{a}}\nLine 2: {{b}}")
+        self.assertEqual(
+            tmpl.render(a="hello", b="world"), "Line 1: hello\nLine 2: world"
+        )
+
+    def test_repr(self):
+        tmpl = PromptTemplate("{{a}} {{b}}")
+        r = repr(tmpl)
+        self.assertIn("PromptTemplate", r)
+        self.assertIn("a", r)
+
+    def test_str(self):
+        tmpl = PromptTemplate("Hello, {{name}}!")
+        self.assertEqual(str(tmpl), "Hello, {{name}}!")
+
+    def test_error_lists_all_missing_sorted(self):
+        with self.assertRaisesRegex(PromptVarsError, "b, c"):
+            fill("{{c}} {{b}}")  # both missing, reported sorted
+
+
+if __name__ == "__main__":
+    unittest.main()
